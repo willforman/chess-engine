@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::fmt::Display;
+use std::ops::Neg;
 
 use strum::IntoEnumIterator;
 
@@ -7,8 +8,58 @@ use crate::bitboard::Square;
 use crate::position::{Piece, Position, Side};
 use crate::GenerateMoves;
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Eval {
+    Score(f64),
+    Mate(i8),
+    Draw,
+}
+
+impl Display for Eval {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Eval::Score(score) => writeln!(f, "cp {}", score / 100.),
+            Eval::Mate(plies) => {
+                let sign = if *plies > 0 { '+' } else { '-' };
+                writeln!(f, "{}M{}", sign, plies)
+            }
+            Eval::Draw => writeln!(f, "cp 0"),
+        }
+    }
+}
+
+impl PartialOrd for Eval {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        todo!()
+        //match (self, other) {
+        //    (Eval::Mate(m1), Eval::Mate(m2))
+        //}
+    }
+}
+
+impl Neg for Eval {
+    type Output = Self;
+    fn neg(self) -> Self::Output {
+        match self {
+            Eval::Score(score) => Eval::Score(-score),
+            Eval::Mate(mate) => Eval::Mate(-mate),
+            Eval::Draw => Eval::Draw,
+        }
+    }
+}
+
+//impl Eval {
+//    fn negate(&mut self) {
+//        *self = match *self {
+//            Eval::Score(score) => Eval::Score(-score),
+//            Eval::Mate(plies_til_mate) => todo!(),
+//            Eval::Draw => panic!("Shouldn't have been called with draw"),
+//        }
+//    }
+//}
+
 pub trait EvaluatePosition {
-    fn evaluate(&self, position: &Position, move_gen: impl GenerateMoves) -> f64;
+    fn evaluate(&self, position: &Position, move_gen: impl GenerateMoves) -> Eval;
 }
 
 #[derive(Clone, Copy)]
@@ -94,38 +145,40 @@ fn get_piece_square_bonus(piece: Piece, square: Square, is_early_or_mid_game: bo
 }
 
 impl EvaluatePosition for PositionEvaluator {
-    fn evaluate(&self, position: &Position, move_gen: impl GenerateMoves) -> f64 {
+    fn evaluate(&self, position: &Position, move_gen: impl GenerateMoves) -> Eval {
         // Return evaluation relative to the side to move
         if position.state.half_move_clock == 50 {
-            return 0.0;
+            return Eval::Draw;
         }
         if move_gen.gen_moves(position).is_empty() && !move_gen.gen_checkers(position).is_empty() {
-            return f64::MIN;
+            return Eval::Mate(0);
         }
 
-        let eval = position
-            .get_piece_locs()
-            .into_iter()
-            .fold(0., |acc, (piece, side, square)| {
-                // For black, we need to flip index in order to use correct value
-                let square = if side == Side::Black {
-                    square.flip()
-                } else {
-                    square
-                };
-                let val = piece_value(piece) + get_piece_square_bonus(piece, square, true);
+        let eval_score =
+            position
+                .get_piece_locs()
+                .into_iter()
+                .fold(0., |acc, (piece, side, square)| {
+                    // For black, we need to flip index in order to use correct value
+                    let square = if side == Side::Black {
+                        square.flip()
+                    } else {
+                        square
+                    };
+                    let val = piece_value(piece) + get_piece_square_bonus(piece, square, true);
 
-                if side == Side::White {
-                    acc + val
-                } else {
-                    acc - val
-                }
-            });
-        if position.state.to_move == Side::White {
-            eval
+                    if side == Side::White {
+                        acc + val
+                    } else {
+                        acc - val
+                    }
+                });
+        let eval_score = if position.state.to_move == Side::Black {
+            eval_score
         } else {
-            -eval
-        }
+            -eval_score
+        };
+        Eval::Score(eval_score)
     }
 }
 
@@ -141,3 +194,38 @@ fn piece_value(piece: Piece) -> f64 {
 }
 
 pub static POSITION_EVALUATOR: PositionEvaluator = PositionEvaluator {};
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_eval_ord() {
+        let evals_order_want = vec![
+            Eval::Mate(-3),
+            Eval::Mate(-1),
+            Eval::Score(-2.0),
+            Eval::Score(-0.5),
+            Eval::Draw,
+            Eval::Score(0.5),
+            Eval::Score(2.0),
+            Eval::Mate(1),
+            Eval::Mate(3),
+        ];
+        let evals = vec![
+            Eval::Mate(-3),
+            Eval::Mate(-1),
+            Eval::Score(-2.0),
+            Eval::Score(-0.5),
+            Eval::Draw,
+            Eval::Score(0.5),
+            Eval::Score(2.0),
+            Eval::Mate(1),
+            Eval::Mate(3),
+        ];
+
+        let mut sorted = evals.clone();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+
+        assert_eq!(sorted, evals_order_want);
+    }
+}

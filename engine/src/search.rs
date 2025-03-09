@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, debug_span, enabled, error, info};
 
-use crate::evaluation::EvaluatePosition;
+use crate::evaluation::{Eval, EvaluatePosition};
 use crate::move_gen::GenerateMoves;
 use crate::position::{Move, Position};
 use crate::Side;
@@ -297,7 +297,7 @@ pub fn search(
         let mut move_vals = HashMap::with_capacity(moves.len());
         for mve in moves.clone() {
             let move_position = &move_positions[&mve];
-            let (mut move_val, search_complete) = search_helper(
+            let maybe_eval = search_helper(
                 move_position,
                 params,
                 1,
@@ -386,28 +386,28 @@ fn search_helper(
     iterative_deepening_max_depth: u64,
     positions_processed: &mut u64,
     start_time: &Instant,
-    latest_score: &mut f64,
-    mut alpha: f64,
-    beta: f64,
+    latest_eval: &mut Eval,
+    mut alpha: Eval,
+    beta: Eval,
     move_gen: impl GenerateMoves + std::marker::Copy,
     position_eval: impl EvaluatePosition + std::marker::Copy,
     terminate: Arc<AtomicBool>,
-) -> (f64, bool) {
+) -> Option<Eval> {
     // If this search has been terminated, return early
     if terminate.load(std::sync::atomic::Ordering::Relaxed) {
-        return (0.0, true);
+        return None;
     }
     // If this search is at the max number of nodes, return early
     if let Some(max_nodes) = params.max_nodes {
         debug_assert!(*positions_processed <= max_nodes);
         if *positions_processed == max_nodes {
-            return (0.0, true);
+            return None;
         }
     }
     // If search has exceeded total time, return early
     if let Some(move_time) = params.move_time {
         if start_time.elapsed() >= move_time {
-            return (0.0, true);
+            return None;
         }
     }
     *positions_processed += 1;
@@ -418,19 +418,19 @@ fn search_helper(
             *positions_processed,
             curr_depth,
             start_time,
-            latest_score,
+            latest_eval,
             None,
         );
     }
 
     if curr_depth == iterative_deepening_max_depth {
         let curr_evaluation = position_eval.evaluate(position, move_gen);
-        return (curr_evaluation, false);
+        return Some(curr_evaluation);
     }
 
     let moves = move_gen.gen_moves(position);
 
-    let mut best_val = f64::MIN;
+    let mut best_eval = Eval::Score(f64::MIN);
     for mve in moves {
         let mut move_position = position.clone();
         let move_res = move_position.make_move(&mve);
@@ -440,40 +440,39 @@ fn search_helper(
                 *positions_processed,
                 curr_depth,
                 start_time,
-                latest_score,
+                latest_eval,
                 None,
             );
             error!("Error for move {}: {}", mve, err);
             panic!("Err encountered searching, exiting");
         }
 
-        let (got_val, search_complete) = search_helper(
+        // Reason for `?`: if the child node is signaliing search is terminated,
+        // better terminate self.
+        let got_eval = search_helper(
             &move_position,
             params,
             curr_depth + 1,
             iterative_deepening_max_depth,
             positions_processed,
             start_time,
-            latest_score,
+            latest_eval,
             -beta,
             -alpha,
             move_gen,
             position_eval,
             Arc::clone(&terminate),
-        );
-
-        // If child node is signaling search is terminated, better terminate self
-        if search_complete {
-            return (best_val, true);
-        }
+        )?;
 
         // Then, flip value because it was relative to the other side
-        let got_val = -got_val;
+        let got_eval = -got_eval;
 
-        if got_val >= best_val {
-            best_val = got_val;
-            alpha = f64::max(alpha, got_val);
-            *latest_score = got_val;
+        if got_eval >= best_eval {
+            best_eval = got_eval;
+            if got_eval >= alpha {
+                alpha = got_eval;
+            }
+            *latest_eval = got_eval;
         }
 
         if alpha >= beta {
@@ -481,7 +480,7 @@ fn search_helper(
         }
     }
 
-    (best_val, false)
+    Some(best_eval)
 }
 
 fn write_search_info(
@@ -489,9 +488,9 @@ fn write_search_info(
     nodes_processed: u64,
     curr_depth: u64,
     start_time: &Instant,
-    latest_score: &f64,
+    latest_eval: &Eval,
     best_move: Option<Move>,
 ) {
     let nps = nodes_processed as f32 / start_time.elapsed().as_secs_f32();
-    info!("info depth {} seldepth {} multipv {} score cp {} nodes {} nps {:.0} hashfull {} tbhits {} time {} pv {}", iterative_deepening_max_depth, curr_depth, 1, latest_score / 100., nodes_processed, nps, 0, 0, start_time.elapsed().as_millis(), best_move.map_or("".to_string(), |mve| mve.to_string().to_ascii_lowercase()));
+    info!("info depth {} seldepth {} multipv {} score cp {} nodes {} nps {:.0} hashfull {} tbhits {} time {} pv {}", iterative_deepening_max_depth, curr_depth, 1, latest_eval, nodes_processed, nps, 0, 0, start_time.elapsed().as_millis(), best_move.map_or("".to_string(), |mve| mve.to_string().to_ascii_lowercase()));
 }
