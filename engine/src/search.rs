@@ -240,7 +240,7 @@ pub fn search(
 
     let mut positions_processed: u64 = 0;
     let start = Instant::now();
-    let mut latest_score = 0.0;
+    let mut latest_eval = Eval::Score(0.);
 
     let max_depth: usize = match (params.max_depth, params.mate) {
         (Some(max_depth), None) => max_depth.try_into().unwrap(),
@@ -297,32 +297,31 @@ pub fn search(
         let mut move_vals = HashMap::with_capacity(moves.len());
         for mve in moves.clone() {
             let move_position = &move_positions[&mve];
-            let maybe_eval = search_helper(
+            let maybe_move_eval = search_helper(
                 move_position,
                 params,
                 1,
                 iterative_deepening_max_depth,
                 &mut positions_processed,
                 &start,
-                &mut latest_score,
-                f64::MIN,
-                f64::MAX,
+                &mut latest_eval,
+                Eval::Score(f64::MIN),
+                Eval::Score(f64::MAX),
                 move_gen,
                 position_eval,
                 Arc::clone(&terminate),
             );
-            // Since this is after making a move, flip the value to get the value
-            // relative to the side of `position`
-            move_val = -move_val;
-            move_vals.insert(mve, move_val);
-
-            if search_complete {
+            if let Some(move_eval) = maybe_move_eval {
+                // Since this is after making a move, flip the value to get the value
+                // relative to the side of `position`
+                move_vals.insert(mve, move_eval.flip());
+            } else {
                 write_search_info(
                     iterative_deepening_max_depth,
                     positions_processed,
                     iterative_deepening_max_depth,
                     &start,
-                    &latest_score,
+                    &latest_eval,
                     None,
                 );
                 break 'outer;
@@ -339,18 +338,18 @@ pub fn search(
         // Find best move
         best_move = Some(moves[0]);
 
-        latest_score = move_vals[&best_move.unwrap()];
+        latest_eval = move_vals[&best_move.unwrap()];
 
         write_search_info(
             iterative_deepening_max_depth,
             positions_processed,
             iterative_deepening_max_depth,
             &start,
-            &latest_score,
+            &latest_eval,
             best_move,
         );
 
-        debug!("best move: {}, score: {}", best_move.unwrap(), latest_score);
+        debug!("best move: {}, eval: {}", best_move.unwrap(), latest_eval);
 
         if tracing::enabled!(tracing::Level::DEBUG) {
             //let mut search_str = String::with_capacity(400);
@@ -457,15 +456,15 @@ fn search_helper(
             positions_processed,
             start_time,
             latest_eval,
-            -beta,
-            -alpha,
+            beta.flip(),
+            alpha.flip(),
             move_gen,
             position_eval,
             Arc::clone(&terminate),
         )?;
 
         // Then, flip value because it was relative to the other side
-        let got_eval = -got_eval;
+        let got_eval = got_eval.flip();
 
         if got_eval >= best_eval {
             best_eval = got_eval;

@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::ops::Neg;
@@ -30,30 +31,81 @@ impl Display for Eval {
 
 impl PartialOrd for Eval {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        todo!()
-        //match (self, other) {
-        //    (Eval::Mate(m1), Eval::Mate(m2))
-        //}
+        match (self, other) {
+            (Eval::Score(s1), Eval::Score(s2)) => s1.partial_cmp(s2),
+            (Eval::Mate(m1), Eval::Mate(m2)) => m1.partial_cmp(m2),
+            (Eval::Draw, Eval::Draw) => Some(Ordering::Equal),
+
+            (Eval::Score(s), Eval::Draw) => {
+                if *s >= 0. {
+                    Some(Ordering::Greater)
+                } else {
+                    Some(Ordering::Less)
+                }
+            }
+            (Eval::Draw, Eval::Score(s)) => {
+                if *s >= 0. {
+                    Some(Ordering::Less)
+                } else {
+                    Some(Ordering::Greater)
+                }
+            }
+            (Eval::Mate(m), Eval::Draw) => {
+                if *m >= 0 {
+                    Some(Ordering::Greater)
+                } else {
+                    Some(Ordering::Less)
+                }
+            }
+            (Eval::Draw, Eval::Mate(m)) => {
+                if *m >= 0 {
+                    Some(Ordering::Less)
+                } else {
+                    Some(Ordering::Greater)
+                }
+            }
+
+            (Eval::Mate(m), Eval::Score(_)) => {
+                if *m > 0 {
+                    Some(Ordering::Greater)
+                } else {
+                    Some(Ordering::Less)
+                }
+            }
+            (Eval::Score(_), Eval::Mate(m)) => {
+                if *m > 0 {
+                    Some(Ordering::Less)
+                } else {
+                    Some(Ordering::Greater)
+                }
+            }
+        }
     }
 }
 
-impl Neg for Eval {
-    type Output = Self;
-    fn neg(self) -> Self::Output {
+impl Eval {
+    pub fn flip(&self) -> Eval {
         match self {
             Eval::Score(score) => Eval::Score(-score),
-            Eval::Mate(mate) => Eval::Mate(-mate),
+            Eval::Mate(mate) => {
+                if *mate > 0 {
+                    Eval::Mate(-(mate + 1))
+                } else {
+                    Eval::Mate(-(mate - 1))
+                }
+            }
             Eval::Draw => Eval::Draw,
         }
     }
 }
 
-//impl Eval {
-//    fn negate(&mut self) {
-//        *self = match *self {
+//impl Neg for Eval {
+//    type Output = Self;
+//    fn neg(self) -> Self::Output {
+//        match self {
 //            Eval::Score(score) => Eval::Score(-score),
-//            Eval::Mate(plies_til_mate) => todo!(),
-//            Eval::Draw => panic!("Shouldn't have been called with draw"),
+//            Eval::Mate(mate) => Eval::Mate(-mate),
+//            Eval::Draw => Eval::Draw,
 //        }
 //    }
 //}
@@ -199,6 +251,7 @@ pub static POSITION_EVALUATOR: PositionEvaluator = PositionEvaluator {};
 mod tests {
     use super::*;
 
+    #[test]
     fn test_eval_ord() {
         let evals_order_want = vec![
             Eval::Mate(-3),
